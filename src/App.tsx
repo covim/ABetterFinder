@@ -36,6 +36,7 @@ import {
   type DateField,
   type DriveMapping,
   type MatchMode,
+  type MovedPath,
   type SearchHit,
   type SearchQuery,
 } from "@/lib/api";
@@ -48,6 +49,7 @@ import {
   toDateInput,
 } from "@/lib/format";
 import { createHighlighter } from "@/lib/highlight";
+import { isInsideRoots } from "@/lib/paths";
 import { createUncResolver } from "@/lib/unc";
 import { loadRoots, saveRoots } from "@/lib/settings";
 import {
@@ -85,6 +87,9 @@ interface ActiveMatch {
   /** Nur dann ist auch der Ordnerpfad am Treffer beteiligt und darf markiert
    *  werden — sonst kam der Treffer allein ueber den Dateinamen zustande. */
   matchFullPath: boolean;
+  /** Suchorte dieser Suche: wer Treffer dorthin verschiebt, behaelt sie in
+   *  der Liste, alles andere faellt heraus. */
+  roots: string[];
 }
 
 const EMPTY_MATCH: ActiveMatch = {
@@ -92,6 +97,7 @@ const EMPTY_MATCH: ActiveMatch = {
   mode: "auto",
   caseSensitive: false,
   matchFullPath: false,
+  roots: [],
 };
 
 export default function App() {
@@ -270,6 +276,7 @@ export default function App() {
       mode: current.mode,
       caseSensitive: current.caseSensitive,
       matchFullPath: current.matchFullPath,
+      roots: current.roots,
     });
     setSearching(true);
     try {
@@ -402,6 +409,27 @@ export default function App() {
     return sortedRef.current;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, sortSig]);
+
+  // Nach dem Verschieben: liegt das Ziel noch in den Suchorten, zeigt der
+  // Treffer auf den neuen Ort, sonst verschwindet er. Bewusst neue Objekte,
+  // weil die Zeilen auf Referenzgleichheit memoisiert sind.
+  const activeRootsRef = React.useRef<string[]>([]);
+  activeRootsRef.current = activeMatch.roots;
+  const applyMoves = React.useCallback((moved: MovedPath[], dest: string) => {
+    if (moved.length === 0) return;
+    const targets = new Map(moved.map((m) => [m.from, m.to]));
+    const keep = isInsideRoots(dest, activeRootsRef.current);
+    const next: SearchHit[] = [];
+    for (const hit of hitsRef.current) {
+      const to = targets.get(hit.path);
+      if (to === undefined) next.push(hit);
+      else if (keep) next.push({ ...hit, path: to, parent: dest });
+    }
+    hitsRef.current = next;
+    // Erzwingt im `items`-Memo eine Neusortierung aus `hitsRef`.
+    sortedSigRef.current = "";
+    setVersion((v) => v + 1);
+  }, []);
 
   const highlight = React.useMemo(
     () =>
@@ -663,6 +691,7 @@ export default function App() {
           onSortChange={setSort}
           onError={showError}
           onNotice={showNotice}
+          onMoved={applyMoves}
           toUnc={toUnc}
           emptyState={
             <EmptyState
@@ -702,7 +731,7 @@ export default function App() {
             <span className="font-medium text-foreground">{notice}</span>
           )}
           <span className="ml-auto">
-            Strg+F Suchfeld · Esc Stopp · Rechtsklick für Menü
+            Strg+F Suchfeld · Esc Stopp · Strg+X/C Verschieben/Kopieren · Rechtsklick für Menü
           </span>
         </div>
       </div>

@@ -5,8 +5,8 @@ mod sysops;
 use std::sync::Arc;
 
 use search::{SearchQuery, SearchState};
-use sysops::{DriveInfo, DriveMapping};
-use tauri::{AppHandle, Manager, State};
+use sysops::{DriveInfo, DriveMapping, TransferMode, TransferResult};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 #[tauri::command]
 fn start_search(
@@ -59,6 +59,33 @@ fn open_path(path: String) -> Result<(), String> {
     sysops::open_with_default_app(&path)
 }
 
+/// Verschiebt oder kopiert die markierten Treffer in einen Zielordner. Laeuft
+/// auf einem Hintergrund-Thread: die Shell zeigt waehrenddessen ihren eigenen
+/// Fortschrittsdialog, das Fenster soll dabei nicht einfrieren.
+#[tauri::command]
+async fn transfer_paths(
+    window: WebviewWindow,
+    paths: Vec<String>,
+    dest: String,
+    mode: TransferMode,
+) -> Result<TransferResult, String> {
+    let owner = window_handle(&window);
+    tauri::async_runtime::spawn_blocking(move || sysops::transfer(paths, &dest, mode, owner))
+        .await
+        .map_err(|e| format!("Dateioperation abgebrochen: {e}"))?
+}
+
+/// Fensterhandle als Zahl, damit es in den Hintergrund-Thread darf.
+#[cfg(windows)]
+fn window_handle(window: &WebviewWindow) -> isize {
+    window.hwnd().map(|h| h.0 as isize).unwrap_or(0)
+}
+
+#[cfg(not(windows))]
+fn window_handle(_window: &WebviewWindow) -> isize {
+    0
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -76,6 +103,7 @@ pub fn run() {
             reveal_in_explorer,
             open_containing_folder,
             open_path,
+            transfer_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -22,11 +22,13 @@ ignore = "0.4"
 globset = "0.4"
 regex = "1"
 
-# Aufloesung gemappter Netzlaufwerke auf ihre UNC-Freigabe.
+# Aufloesung gemappter Netzlaufwerke auf ihre UNC-Freigabe sowie Verschieben/
+# Kopieren ueber die Windows-Shell (SHFileOperationW).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_WNet",
+  "Win32_UI_Shell",
 ] }
 
 [profile.release]

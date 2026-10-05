@@ -1,12 +1,15 @@
 import * as React from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
   ChevronRight,
   Copy,
+  CopyPlus,
   ExternalLink,
   Folder,
+  FolderInput,
   FolderOpen,
   FileText,
   Table,
@@ -36,7 +39,10 @@ import {
   openContainingFolder,
   openPath,
   revealInExplorer,
+  transferPaths,
+  type MovedPath,
   type SearchHit,
+  type TransferMode,
 } from "@/lib/api";
 
 /** Kompakte Zeilenhoehe; Kopf- und Trefferzeilen sind gleich hoch, damit die
@@ -56,7 +62,7 @@ type RowItem =
   | { kind: "group"; folder: string; count: number; collapsed: boolean }
   | { kind: "hit"; hit: SearchHit };
 
-/** Identitaet der markierten Zeile. Der Index allein reicht nicht: seit die
+/** Identitaet einer Zeile (Fokus bzw. Anker). Der Index allein reicht nicht: seit die
  *  Sortierung auch waehrend der Suche greift, kann derselbe Index nach dem
  *  naechsten Treffer-Batch auf eine andere Datei zeigen. */
 interface Selection {
@@ -71,6 +77,26 @@ const rowId = (row: RowItem): string =>
 
 const isSameRow = (row: RowItem, sel: Selection): boolean =>
   row.kind === sel.kind && rowId(row) === sel.id;
+
+const toSelection = (index: number, row: RowItem): Selection => ({
+  index,
+  kind: row.kind,
+  id: rowId(row),
+});
+
+interface ClickModifiers {
+  /** Strg: einzeln hinzufuegen/entfernen. */
+  toggle: boolean;
+  /** Shift: Bereich ab dem Anker. */
+  range: boolean;
+}
+
+const PLAIN_CLICK: ClickModifiers = { toggle: false, range: false };
+
+const modifiersOf = (e: React.MouseEvent | React.KeyboardEvent): ClickModifiers => ({
+  toggle: e.ctrlKey || e.metaKey,
+  range: e.shiftKey,
+});
 
 interface ResultListProps {
   items: SearchHit[];
@@ -88,6 +114,8 @@ interface ResultListProps {
   onError: (message: string) => void;
   /** Kurze Erfolgsmeldung fuer die Statuszeile. */
   onNotice: (message: string) => void;
+  /** Meldet verschobene Treffer, damit die Liste ihre Pfade nachzieht. */
+  onMoved: (moved: MovedPath[], dest: string) => void;
   /** Macht beim Kopieren aus Netzlaufwerk-Pfaden die UNC-Form. */
   toUnc: UncResolver;
   emptyState: React.ReactNode;
@@ -104,13 +132,22 @@ export function ResultList({
   onSortChange,
   onError,
   onNotice,
+  onMoved,
   toUnc,
   emptyState,
 }: ResultListProps) {
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = React.useState(0);
   const [viewportHeight, setViewportHeight] = React.useState(600);
-  const [selected, setSelected] = React.useState<Selection | null>(null);
+  /** Cursor fuer Pfeiltasten und Enter; darf auch ein Gruppenkopf sein. */
+  const [focus, setFocus] = React.useState<Selection | null>(null);
+  /** Startpunkt fuer Shift-Bereiche. */
+  const [anchor, setAnchor] = React.useState<Selection | null>(null);
+  /** Markierte Treffer, ueber den Pfad — bleibt so beim Umsortieren und
+   *  waehrend neue Treffer einstroemen stabil. */
+  const [marked, setMarked] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -131,7 +168,9 @@ export function ResultList({
     if (itemCount === 0) {
       viewportRef.current?.scrollTo({ top: 0 });
       setScrollTop(0);
-      setSelected(null);
+      setFocus(null);
+      setAnchor(null);
+      setMarked(new Set());
       setCollapsed(new Set());
     }
   }, [itemCount]);
@@ -168,38 +207,139 @@ export function ResultList({
     [grouped, items, rowCount],
   );
 
-  // Die Auswahl haengt am Zeilenschluessel; nach jeder Umsortierung wird ihr
-  // Index einmal linear nachgezogen. Ein reiner Stringvergleich ueber die
-  // Zeilen ist selbst bei 50 000 Treffern im Millisekundenbereich.
-  const selectedIndex = React.useMemo(() => {
-    if (!selected) return null;
-    const atIndex = rowAt(selected.index);
-    if (atIndex && isSameRow(atIndex, selected)) return selected.index;
-    if (grouped) {
-      for (let i = 0; i < grouped.length; i++) {
-        if (isSameRow(grouped[i], selected)) return i;
+  // Fokus und Anker haengen am Zeilenschluessel; nach jeder Umsortierung
+  // wird ihr Index einmal linear nachgezogen. Ein reiner Stringvergleich ueber
+  // die Zeilen ist selbst bei 50 000 Treffern im Millisekundenbereich.
+  const findRowIndex = React.useCallback(
+    (sel: Selection | null): number | null => {
+      if (!sel) return null;
+      const atIndex = rowAt(sel.index);
+      if (atIndex && isSameRow(atIndex, sel)) return sel.index;
+      if (grouped) {
+        for (let i = 0; i < grouped.length; i++) {
+          if (isSameRow(grouped[i], sel)) return i;
+        }
+        return null;
+      }
+      if (sel.kind !== "hit") return null;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].path === sel.id) return i;
       }
       return null;
-    }
-    if (selected.kind !== "hit") return null;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].path === selected.id) return i;
-    }
-    return null;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, grouped, items, version, rowAt]);
+    [grouped, items, version, rowAt],
+  );
 
-  const selectRow = React.useCallback((index: number, row: RowItem) => {
-    setSelected({ index, kind: row.kind, id: rowId(row) });
-  }, []);
+  const focusIndex = React.useMemo(
+    () => findRowIndex(focus),
+    [focus, findRowIndex],
+  );
 
-  const toggleGroup = React.useCallback((folder: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(folder)) next.add(folder);
-      return next;
-    });
-  }, []);
+  /** Pfade aller Trefferzeilen zwischen zwei Zeilen (inklusive). */
+  const pathsBetween = React.useCallback(
+    (from: number, to: number): string[] => {
+      const out: string[] = [];
+      for (let i = Math.min(from, to); i <= Math.max(from, to); i++) {
+        const row = rowAt(i);
+        if (row?.kind === "hit") out.push(row.hit.path);
+      }
+      return out;
+    },
+    [rowAt],
+  );
+
+  /** Explorer-Logik: Klick waehlt allein, Strg toggelt, Shift erweitert ab
+   *  dem Anker. Gilt fuer Maus und Pfeiltasten gleichermassen. */
+  const pickRow = (index: number, row: RowItem, mods: ClickModifiers) => {
+    const sel = toSelection(index, row);
+    setFocus(sel);
+
+    if (mods.range) {
+      const from = findRowIndex(anchor);
+      const range = pathsBetween(from ?? index, index);
+      setMarked((prev) => {
+        const next = mods.toggle ? new Set(prev) : new Set<string>();
+        for (const path of range) next.add(path);
+        return next;
+      });
+      if (from === null) setAnchor(sel);
+      return;
+    }
+
+    setAnchor(sel);
+    if (row.kind === "group") {
+      if (!mods.toggle) {
+        setMarked(new Set());
+        return;
+      }
+      // Strg auf dem Gruppenkopf: den ganzen Ordner an- bzw. abwaehlen.
+      const folderPaths = items
+        .filter((h) => h.parent === row.folder)
+        .map((h) => h.path);
+      setMarked((prev) => {
+        const next = new Set(prev);
+        if (folderPaths.every((p) => next.has(p))) {
+          for (const p of folderPaths) next.delete(p);
+        } else {
+          for (const p of folderPaths) next.add(p);
+        }
+        return next;
+      });
+      return;
+    }
+
+    const path = row.hit.path;
+    if (mods.toggle) {
+      setMarked((prev) => {
+        const next = new Set(prev);
+        if (!next.delete(path)) next.add(path);
+        return next;
+      });
+    } else {
+      setMarked(new Set([path]));
+    }
+  };
+
+  const onRowMouseDown = (
+    e: React.MouseEvent,
+    index: number,
+    row: RowItem,
+  ) => {
+    // Rechtsklick regelt `onRowContextMenu`, damit eine Mehrfachauswahl
+    // dabei erhalten bleibt.
+    if (e.button !== 0) return;
+    const mods = modifiersOf(e);
+    if (mods.range || mods.toggle) {
+      // Sonst zieht Shift+Klick eine Textmarkierung ueber die Zeilen.
+      e.preventDefault();
+      viewportRef.current?.focus();
+    }
+    pickRow(index, row, mods);
+  };
+
+  const toggleGroup = React.useCallback(
+    (folder: string) => {
+      // Beim Einklappen fallen die Treffer aus der Auswahl: sonst wuerden
+      // unsichtbare Dateien mitverschoben.
+      if (!collapsed.has(folder)) {
+        setMarked((prev) => {
+          if (prev.size === 0) return prev;
+          const next = new Set(prev);
+          for (const hit of items) {
+            if (hit.parent === folder) next.delete(hit.path);
+          }
+          return next;
+        });
+      }
+      setCollapsed((prev) => {
+        const next = new Set(prev);
+        if (!next.delete(folder)) next.add(folder);
+        return next;
+      });
+    },
+    [collapsed, items],
+  );
 
   const run = React.useCallback(
     (action: (path: string) => Promise<void>, path: string) => {
@@ -221,28 +361,88 @@ export function ResultList({
     [onError, onNotice, toUnc],
   );
 
-  // Anzahl der Zeilen, die "Mit Kopfzeile kopieren" ausgeben wuerde:
-  // eingeklappte Gruppen sind nicht sichtbar und damit auch nicht dabei.
-  const exportCount = React.useMemo(() => {
-    if (!grouped) return itemCount;
-    let n = 0;
-    for (const row of grouped) if (row.kind === "hit") n++;
-    return n;
-  }, [grouped, itemCount]);
+  // Sichtbare Treffer in Anzeigereihenfolge: eingeklappte Gruppen sind nicht
+  // dabei. Grundlage fuer "Mit Kopfzeile kopieren" und Strg+A.
+  const visibleHits = React.useMemo(() => {
+    if (!grouped) return items;
+    const hits: SearchHit[] = [];
+    for (const row of grouped) if (row.kind === "hit") hits.push(row.hit);
+    return hits;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grouped, items, version]);
+
+  const exportCount = grouped ? visibleHits.length : itemCount;
 
   const copyWithHeaders = React.useCallback(() => {
-    let hits: SearchHit[];
-    if (grouped) {
-      hits = [];
-      for (const row of grouped) if (row.kind === "hit") hits.push(row.hit);
-    } else {
-      hits = items;
-    }
     navigator.clipboard
-      .writeText(buildTsv(hits, dateField, toUnc))
-      .then(() => onNotice(`${formatCount(hits.length)} Zeilen kopiert`))
+      .writeText(buildTsv(visibleHits, dateField, toUnc))
+      .then(() => onNotice(`${formatCount(visibleHits.length)} Zeilen kopiert`))
       .catch(() => onError("Tabelle konnte nicht kopiert werden."));
-  }, [grouped, items, dateField, onError, onNotice, toUnc]);
+  }, [visibleHits, dateField, onError, onNotice, toUnc]);
+
+  // Markierte Treffer, die es in der Liste noch gibt — in Anzeigereihenfolge.
+  const markedHits = React.useMemo(
+    () => (marked.size === 0 ? [] : items.filter((h) => marked.has(h.path))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, version, marked],
+  );
+
+  const transferringRef = React.useRef(false);
+  const transfer = async (mode: TransferMode) => {
+    const hits = markedHits;
+    if (hits.length === 0 || transferringRef.current) return;
+    transferringRef.current = true;
+
+    const what =
+      hits.length === 1
+        ? `„${hits[0].name}“`
+        : `${formatCount(hits.length)} Einträge`;
+    try {
+      const dest = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: hits[0].parent,
+        title: `${what} ${mode === "move" ? "verschieben" : "kopieren"} nach …`,
+      });
+      if (typeof dest !== "string") return;
+
+      const result = await transferPaths(
+        hits.map((h) => h.path),
+        dest,
+        mode,
+      );
+
+      if (mode === "copy") {
+        onNotice(result.aborted ? "Kopieren abgebrochen" : `${what} kopiert`);
+        return;
+      }
+
+      onMoved(result.moved, dest);
+      // Auswahl und Fokus wandern mit an den neuen Ort.
+      const renamed = new Map(result.moved.map((m) => [m.from, m.to]));
+      const follow = (sel: Selection | null) =>
+        sel?.kind === "hit" && renamed.has(sel.id)
+          ? { ...sel, id: renamed.get(sel.id)! }
+          : sel;
+      setMarked((prev) => new Set([...prev].map((p) => renamed.get(p) ?? p)));
+      setFocus(follow);
+      setAnchor(follow);
+
+      const n = result.moved.length;
+      if (result.aborted) {
+        onNotice(`Verschieben abgebrochen – ${formatCount(n)} verschoben`);
+      } else if (n === hits.length) {
+        onNotice(`${what} verschoben`);
+      } else {
+        onNotice(`${formatCount(n)} von ${formatCount(hits.length)} verschoben`);
+      }
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      transferringRef.current = false;
+      viewportRef.current?.focus();
+    }
+  };
 
   const toggleSort = (key: SortKey) => {
     if (!sort || sort.key !== key) onSortChange({ key, dir: "asc" });
@@ -262,23 +462,39 @@ export function ResultList({
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (rowCount === 0) return;
+
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+      const key = event.key.toLowerCase();
+      if (key === "a") {
+        event.preventDefault();
+        setMarked(new Set(visibleHits.map((h) => h.path)));
+        return;
+      }
+      if (key === "x" || key === "c") {
+        event.preventDefault();
+        void transfer(key === "x" ? "move" : "copy");
+        return;
+      }
+    }
+
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const next =
-        selectedIndex === null
+        focusIndex === null
           ? first
           : Math.min(
               rowCount - 1,
-              Math.max(0, selectedIndex + (event.key === "ArrowDown" ? 1 : -1)),
+              Math.max(0, focusIndex + (event.key === "ArrowDown" ? 1 : -1)),
             );
       const row = rowAt(next);
       if (!row) return;
-      selectRow(next, row);
+      // Beim Pfeil zaehlt nur Shift; Strg+Pfeil soll nicht toggeln.
+      pickRow(next, row, { toggle: false, range: event.shiftKey });
       scrollRowIntoView(next);
       return;
     }
-    if (selectedIndex === null) return;
-    const row = rowAt(selectedIndex);
+    if (focusIndex === null) return;
+    const row = rowAt(focusIndex);
     if (!row) return;
 
     if (event.key === "Enter") {
@@ -292,7 +508,13 @@ export function ResultList({
   };
 
   const onRowContextMenu = (index: number, row: RowItem) => {
-    selectRow(index, row);
+    // Rechtsklick in eine bestehende Auswahl laesst sie stehen, ausserhalb
+    // waehlt er die Zeile allein — wie im Explorer.
+    if (row.kind === "hit" && marked.has(row.hit.path)) {
+      setFocus(toSelection(index, row));
+    } else {
+      pickRow(index, row, PLAIN_CLICK);
+    }
     setContextTarget(row);
   };
 
@@ -336,9 +558,9 @@ export function ResultList({
                         folder={row.folder}
                         count={row.count}
                         collapsed={row.collapsed}
-                        selected={selectedIndex === first + index}
+                        focused={focusIndex === first + index}
                         highlight={highlightPath ? highlight : null}
-                        onSelect={() => selectRow(first + index, row)}
+                        onMouseDown={(e) => onRowMouseDown(e, first + index, row)}
                         onContextMenu={() => onRowContextMenu(first + index, row)}
                         onToggle={() => toggleGroup(row.folder)}
                         onOpenFolder={() => run(openContainingFolder, row.folder)}
@@ -352,8 +574,9 @@ export function ResultList({
                         showPath={!groupByFolder}
                         highlight={highlight}
                         pathHighlight={highlightPath ? highlight : null}
-                        selected={selectedIndex === first + index}
-                        onSelect={() => selectRow(first + index, row)}
+                        marked={marked.has(row.hit.path)}
+                        focused={focusIndex === first + index}
+                        onMouseDown={(e) => onRowMouseDown(e, first + index, row)}
                         onContextMenu={() => onRowContextMenu(first + index, row)}
                         onReveal={() => run(revealInExplorer, row.hit.path)}
                         onOpenFolder={() => run(openContainingFolder, row.hit.path)}
@@ -377,6 +600,26 @@ export function ResultList({
           viewportRef.current?.focus();
         }}
       >
+        {contextTarget?.kind !== "group" && markedHits.length > 0 && (
+          <>
+            <ContextMenuItem onSelect={() => void transfer("move")}>
+              <FolderInput />
+              {markedHits.length === 1
+                ? "Verschieben nach …"
+                : `${formatCount(markedHits.length)} Einträge verschieben nach …`}
+              <Shortcut>Strg+X</Shortcut>
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => void transfer("copy")}>
+              <CopyPlus />
+              {markedHits.length === 1
+                ? "Kopieren nach …"
+                : `${formatCount(markedHits.length)} Einträge kopieren nach …`}
+              <Shortcut>Strg+C</Shortcut>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+
         {contextTarget?.kind === "hit" && (
           <>
             <ContextMenuItem onSelect={() => run(openPath, contextTarget.hit.path)}>
@@ -425,6 +668,14 @@ export function ResultList({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+function Shortcut({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="ml-auto pl-4 text-xs tracking-wide text-muted-foreground">
+      {children}
+    </span>
   );
 }
 
@@ -520,9 +771,9 @@ const GroupRow = React.memo(function GroupRow({
   folder,
   count,
   collapsed,
-  selected,
+  focused,
   highlight,
-  onSelect,
+  onMouseDown,
   onContextMenu,
   onToggle,
   onOpenFolder,
@@ -530,22 +781,26 @@ const GroupRow = React.memo(function GroupRow({
   folder: string;
   count: number;
   collapsed: boolean;
-  selected: boolean;
+  focused: boolean;
   highlight: Highlighter | null;
-  onSelect: () => void;
+  onMouseDown: (e: React.MouseEvent) => void;
   onContextMenu: () => void;
   onToggle: () => void;
   onOpenFolder: () => void;
 }) {
   return (
     <div
-      onMouseDown={onSelect}
+      onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
-      onClick={onToggle}
+      // Strg/Shift-Klick waehlt den Ordnerinhalt bzw. einen Bereich und soll
+      // die Gruppe dabei nicht auf- oder zuklappen.
+      onClick={(e) => {
+        if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onToggle();
+      }}
       style={{ height: ROW_HEIGHT }}
       className={cn(
         "group flex cursor-pointer items-center gap-1.5 border-b border-border/40 bg-muted/50 px-2 text-[13px]",
-        selected && "bg-primary/15",
+        focused && "bg-primary/30 shadow-[inset_3px_0_0_var(--color-primary)]",
       )}
     >
       {collapsed ? (
@@ -592,8 +847,11 @@ interface HitRowProps {
   showPath: boolean;
   highlight: Highlighter;
   pathHighlight: Highlighter | null;
-  selected: boolean;
-  onSelect: () => void;
+  /** Teil der Mehrfachauswahl. */
+  marked: boolean;
+  /** Tastatur-Cursor. */
+  focused: boolean;
+  onMouseDown: (e: React.MouseEvent) => void;
   onContextMenu: () => void;
   onReveal: () => void;
   onOpenFolder: () => void;
@@ -608,8 +866,9 @@ const HitRow = React.memo(function HitRow({
   showPath,
   highlight,
   pathHighlight,
-  selected,
-  onSelect,
+  marked,
+  focused,
+  onMouseDown,
   onContextMenu,
   onReveal,
   onOpenFolder,
@@ -621,14 +880,19 @@ const HitRow = React.memo(function HitRow({
 
   return (
     <div
-      onMouseDown={onSelect}
+      onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
       onDoubleClick={onOpen}
       style={{ height: ROW_HEIGHT }}
       className={cn(
         "flex items-center gap-2 border-b border-border/30 px-2 text-[13px] transition-colors",
         indented && "pl-7",
-        selected ? "bg-primary/15" : "hover:bg-accent/60",
+        marked
+          ? "bg-primary/30 shadow-[inset_3px_0_0_var(--color-primary)]"
+          : "hover:bg-accent/60",
+        // Der Cursor faellt nur auf, wo er nicht ohnehin markiert ist, etwa
+        // nach Strg+Klick auf eine schon markierte Zeile.
+        focused && !marked && "ring-1 ring-inset ring-primary/70",
       )}
     >
       <div className="flex min-w-0 flex-[3] items-center gap-1.5">

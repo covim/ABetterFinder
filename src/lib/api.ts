@@ -88,7 +88,31 @@ export const openContainingFolder = (path: string): Promise<void> =>
 export const openPath = (path: string): Promise<void> =>
   invoke("open_path", { path });
 
-export const onHits = (cb: (e: HitsEvent) => void): Promise<UnlistenFn> =>
+export type TransferMode = "move" | "copy";
+
+/** Ein tatsaechlich verschobener Eintrag. */
+export interface MovedPath {
+  from: string;
+  to: string;
+}
+
+export interface TransferResult {
+  /** Nur beim Verschieben gefuellt; von Windows uebersprungene Konflikte
+   *  fehlen hier. */
+  moved: MovedPath[];
+  /** Im Fortschritts- oder Konfliktdialog abgebrochen. */
+  aborted: boolean;
+}
+
+/** Verschiebt oder kopiert ueber die Windows-Shell (mit deren Dialogen). */
+export const transferPaths = (
+  paths: string[],
+  dest: string,
+  mode: TransferMode,
+): Promise<TransferResult> =>
+  invoke<TransferResult>("transfer_paths", { paths, dest, mode });
+
+export const onHits =(cb: (e: HitsEvent) => void): Promise<UnlistenFn> =>
   listen<HitsEvent>("search:hits", (e) => cb(e.payload));
 
 export const onProgress = (cb: (e: ProgressEvent) => void): Promise<UnlistenFn> =>
