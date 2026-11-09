@@ -104,14 +104,14 @@ pub fn list_drives() -> Vec<DriveInfo> {
     }
 }
 
-/// Behaelt nur die Pfade, die es noch gibt. Gedacht fuer die gespeicherten
-/// Suchordner beim Start: ein getrenntes Netzlaufwerk oder ein geloeschter
-/// Ordner soll nicht als Suchort stehenbleiben und stillschweigend nichts
-/// liefern.
+/// Behaelt nur die Pfade, die es noch als Ordner gibt. Gedacht fuer die
+/// Suchordner: ein getrenntes Netzlaufwerk oder ein geloeschter Ordner soll
+/// nicht als Suchort stehenbleiben und stillschweigend nichts liefern, und ein
+/// von Hand eingetippter Dateipfad ist kein Suchort.
 pub fn existing_paths(paths: Vec<String>) -> Vec<String> {
     paths
         .into_iter()
-        .filter(|p| Path::new(p).exists())
+        .filter(|p| Path::new(p).is_dir())
         .collect()
 }
 
@@ -615,5 +615,14 @@ mod tests {
         ]);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], a.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn existing_paths_verwirft_dateien() {
+        let datei = std::env::temp_dir().join(format!("abf-datei-{}.txt", std::process::id()));
+        std::fs::write(&datei, b"x").unwrap();
+        let out = existing_paths(vec![datei.to_string_lossy().to_string()]);
+        std::fs::remove_file(&datei).unwrap();
+        assert!(out.is_empty());
     }
 }
