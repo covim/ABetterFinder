@@ -21,9 +21,9 @@ src-tauri/target/release/abetterfinder.exe    (~5,6 MB)
 Die exe ist eigenständig und braucht keine Installation. Voraussetzung ist
 lediglich die WebView2-Runtime, die unter Windows 10/11 zum System gehört.
 
-Die fertige exe wird zusätzlich nach [bin/](bin/) kopiert. Der Ordner
-`src-tauri/target/` ist reiner Build-Cache und kann jederzeit gelöscht werden —
-der nächste Build erzeugt ihn neu (dauert dann einige Minuten, weil alle
+Die fertige exe wird zusätzlich nach [release/](release/) kopiert und dort
+mit eingecheckt. Der Ordner `src-tauri/target/` ist reiner Build-Cache und kann
+jederzeit gelöscht werden — der nächste Build erzeugt ihn neu (dauert dann einige Minuten, weil alle
 Abhängigkeiten erneut kompiliert werden).
 
 ## Funktionen
