@@ -25,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ResultList } from "@/components/ResultList";
 import { RootPicker } from "@/components/RootPicker";
+import { TitleBar } from "@/components/TitleBar";
 import {
   cancelSearch,
   filterExistingPaths,
@@ -51,7 +52,14 @@ import {
 import { createHighlighter } from "@/lib/highlight";
 import { isInsideRoots } from "@/lib/paths";
 import { createUncResolver } from "@/lib/unc";
-import { loadRoots, saveRoots } from "@/lib/settings";
+import {
+  loadRoots,
+  loadTheme,
+  saveRoots,
+  saveTheme,
+  type Theme,
+} from "@/lib/settings";
+import { applyTheme } from "@/lib/theme";
 import {
   makeComparator,
   mergeSorted,
@@ -118,6 +126,13 @@ export default function App() {
   const [showOptions, setShowOptions] = React.useState(false);
   const [activeMatch, setActiveMatch] =
     React.useState<ActiveMatch>(EMPTY_MATCH);
+  const [theme, setTheme] = React.useState<Theme>(loadTheme);
+
+  const changeTheme = React.useCallback((next: Theme) => {
+    setTheme(next);
+    saveTheme(next);
+    applyTheme(next);
+  }, []);
 
   const [searching, setSearching] = React.useState(false);
   const [status, setStatus] = React.useState<Status>(EMPTY_STATUS);
@@ -455,284 +470,287 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="flex h-full flex-col gap-3 p-3">
-        {/* Suchzeile */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              ref={inputRef}
-              autoFocus
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void runSearch();
-              }}
-              placeholder="Suchbegriff oder Wildcard, z. B. *.pdf, bericht_202?.xlsx, foto*.{jpg,png}"
-              className="h-11 pl-9 pr-9 text-base"
-            />
-            {pattern && (
-              <button
-                type="button"
-                aria-label="Eingabe löschen"
-                onClick={() => setPattern("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+      <div className="flex h-full flex-col">
+        <TitleBar theme={theme} onThemeChange={changeTheme} />
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3">
+          {/* Suchzeile */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                ref={inputRef}
+                autoFocus
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void runSearch();
+                }}
+                placeholder="Suchbegriff oder Wildcard, z. B. *.pdf, bericht_202?.xlsx, foto*.{jpg,png}"
+                className="h-11 pl-9 pr-9 text-base"
+              />
+              {pattern && (
+                <button
+                  type="button"
+                  aria-label="Eingabe löschen"
+                  onClick={() => setPattern("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
 
-          <Select value={mode} onValueChange={(v) => setMode(v as MatchMode)}>
-            <SelectTrigger className="h-11 w-[168px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="auto">Automatisch</SelectItem>
-              <SelectItem value="wildcard">Wildcards</SelectItem>
-              <SelectItem value="substring">Enthält Text</SelectItem>
-              <SelectItem value="regex">Regex</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {searching ? (
-            <Button
-              variant="destructive"
-              className="h-11 w-28"
-              onClick={stopSearch}
-            >
-              <Loader2 className="animate-spin" />
-              Stopp
-            </Button>
-          ) : (
-            <Button className="h-11 w-28" onClick={() => void runSearch()}>
-              <Search />
-              Suchen
-            </Button>
-          )}
-
-          <Button
-            variant={showOptions ? "secondary" : "outline"}
-            size="icon"
-            className="h-11 w-11"
-            onClick={() => setShowOptions((v) => !v)}
-            aria-label="Optionen"
-          >
-            <Settings2 />
-          </Button>
-        </div>
-
-        {/* Datumsfilter direkt beim Suchen */}
-        <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card px-3 py-2.5">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <CalendarRange className="h-4 w-4" />
-            <Select
-              value={dateField}
-              onValueChange={(v) => setDateField(v as DateField)}
-            >
-              <SelectTrigger className="h-8 w-[124px]">
+            <Select value={mode} onValueChange={(v) => setMode(v as MatchMode)}>
+              <SelectTrigger className="h-11 w-[168px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="modified">Geändert</SelectItem>
-                <SelectItem value="created">Erstellt</SelectItem>
+                <SelectItem value="auto">Automatisch</SelectItem>
+                <SelectItem value="wildcard">Wildcards</SelectItem>
+                <SelectItem value="substring">Enthält Text</SelectItem>
+                <SelectItem value="regex">Regex</SelectItem>
               </SelectContent>
             </Select>
-          </div>
 
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="date-from">von</Label>
-            <Input
-              id="date-from"
-              type="date"
-              value={dateFrom}
-              max={dateTo || undefined}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="h-8 w-[150px]"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="date-to">bis</Label>
-            <Input
-              id="date-to"
-              type="date"
-              value={dateTo}
-              min={dateFrom || undefined}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="h-8 w-[150px]"
-            />
-          </div>
-
-          <Separator orientation="vertical" className="h-8" />
-
-          <div className="flex flex-wrap items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => setPreset(0)}>
-              Heute
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setPreset(7)}>
-              7 Tage
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setPreset(30)}>
-              30 Tage
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setPreset(365)}>
-              1 Jahr
-            </Button>
-            {dateActive && (
+            {searching ? (
               <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground"
-                onClick={() => setPreset(null)}
+                variant="destructive"
+                className="h-11 w-28"
+                onClick={stopSearch}
               >
-                <X />
-                Datum
+                <Loader2 className="animate-spin" />
+                Stopp
+              </Button>
+            ) : (
+              <Button className="h-11 w-28" onClick={() => void runSearch()}>
+                <Search />
+                Suchen
               </Button>
             )}
+
+            <Button
+              variant={showOptions ? "secondary" : "outline"}
+              size="icon"
+              className="h-11 w-11"
+              onClick={() => setShowOptions((v) => !v)}
+              aria-label="Optionen"
+            >
+              <Settings2 />
+            </Button>
           </div>
 
-          <div className="ml-auto flex items-center gap-4">
-            <Toggle
-              id="group"
-              label="Nach Ordner gruppieren"
-              checked={groupByFolder}
-              onChange={setGroupByFolder}
-            />
-            <Toggle
-              id="live"
-              label="Live-Suche beim Tippen"
-              checked={liveSearch}
-              onChange={setLiveSearch}
-            />
-          </div>
-        </div>
+          {/* Datumsfilter direkt beim Suchen */}
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card px-3 py-2.5">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <CalendarRange className="h-4 w-4" />
+              <Select
+                value={dateField}
+                onValueChange={(v) => setDateField(v as DateField)}
+              >
+                <SelectTrigger className="h-8 w-[124px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="modified">Geändert</SelectItem>
+                  <SelectItem value="created">Erstellt</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
-        {/* Suchorte */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            Suchen in
-          </span>
-          <RootPicker roots={roots} onChange={changeRoots} onError={showError} />
-        </div>
-
-        {/* Erweiterte Optionen */}
-        {showOptions && (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-card px-3 py-2.5">
-            <Toggle
-              id="opt-files"
-              label="Dateien"
-              checked={includeFiles}
-              onChange={setIncludeFiles}
-            />
-            <Toggle
-              id="opt-dirs"
-              label="Ordner"
-              checked={includeDirs}
-              onChange={setIncludeDirs}
-            />
-            <Toggle
-              id="opt-hidden"
-              label="Versteckte & Systemdateien"
-              checked={includeHidden}
-              onChange={setIncludeHidden}
-            />
-            <Toggle
-              id="opt-case"
-              label="Groß-/Kleinschreibung beachten"
-              checked={caseSensitive}
-              onChange={setCaseSensitive}
-            />
-            <Toggle
-              id="opt-path"
-              label="Im ganzen Pfad suchen"
-              checked={matchFullPath}
-              onChange={setMatchFullPath}
-            />
-            <div className="ml-auto flex items-center gap-2">
-              <Label htmlFor="opt-max">max. Treffer</Label>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="date-from">von</Label>
               <Input
-                id="opt-max"
-                type="number"
-                min={100}
-                step={1000}
-                value={maxResults}
-                onChange={(e) =>
-                  setMaxResults(Math.max(100, Number(e.target.value) || 100))
-                }
-                className="h-8 w-28"
+                id="date-from"
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="h-8 w-[150px]"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="date-to">bis</Label>
+              <Input
+                id="date-to"
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="h-8 w-[150px]"
+              />
+            </div>
+
+            <Separator orientation="vertical" className="h-8" />
+
+            <div className="flex flex-wrap items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={() => setPreset(0)}>
+                Heute
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setPreset(7)}>
+                7 Tage
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setPreset(30)}>
+                30 Tage
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setPreset(365)}>
+                1 Jahr
+              </Button>
+              {dateActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  onClick={() => setPreset(null)}
+                >
+                  <X />
+                  Datum
+                </Button>
+              )}
+            </div>
+
+            <div className="ml-auto flex items-center gap-4">
+              <Toggle
+                id="group"
+                label="Nach Ordner gruppieren"
+                checked={groupByFolder}
+                onChange={setGroupByFolder}
+              />
+              <Toggle
+                id="live"
+                label="Live-Suche beim Tippen"
+                checked={liveSearch}
+                onChange={setLiveSearch}
               />
             </div>
           </div>
-        )}
 
-        {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
-            <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-            <span className="selectable min-w-0 flex-1 break-words">{error}</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setError(null)}
-              aria-label="Meldung schließen"
-            >
-              <X />
-            </Button>
+          {/* Suchorte */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Suchen in
+            </span>
+            <RootPicker roots={roots} onChange={changeRoots} onError={showError} />
           </div>
-        )}
 
-        <ResultList
-          items={items}
-          version={version}
-          dateField={dateField}
-          groupByFolder={groupByFolder}
-          highlight={highlight}
-          highlightPath={activeMatch.matchFullPath}
-          sort={sort}
-          onSortChange={setSort}
-          onError={showError}
-          onNotice={showNotice}
-          onMoved={applyMoves}
-          toUnc={toUnc}
-          emptyState={
-            <EmptyState
-              searching={searching}
-              finished={status.finished}
-              hasCriteria={hasCriteria}
-              hasRoots={roots.length > 0}
-            />
-          }
-        />
+          {/* Erweiterte Optionen */}
+          {showOptions && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-card px-3 py-2.5">
+              <Toggle
+                id="opt-files"
+                label="Dateien"
+                checked={includeFiles}
+                onChange={setIncludeFiles}
+              />
+              <Toggle
+                id="opt-dirs"
+                label="Ordner"
+                checked={includeDirs}
+                onChange={setIncludeDirs}
+              />
+              <Toggle
+                id="opt-hidden"
+                label="Versteckte & Systemdateien"
+                checked={includeHidden}
+                onChange={setIncludeHidden}
+              />
+              <Toggle
+                id="opt-case"
+                label="Groß-/Kleinschreibung beachten"
+                checked={caseSensitive}
+                onChange={setCaseSensitive}
+              />
+              <Toggle
+                id="opt-path"
+                label="Im ganzen Pfad suchen"
+                checked={matchFullPath}
+                onChange={setMatchFullPath}
+              />
+              <div className="ml-auto flex items-center gap-2">
+                <Label htmlFor="opt-max">max. Treffer</Label>
+                <Input
+                  id="opt-max"
+                  type="number"
+                  min={100}
+                  step={1000}
+                  value={maxResults}
+                  onChange={(e) =>
+                    setMaxResults(Math.max(100, Number(e.target.value) || 100))
+                  }
+                  className="h-8 w-28"
+                />
+              </div>
+            </div>
+          )}
 
-        {/* Statuszeile */}
-        <div className="flex shrink-0 flex-wrap items-center gap-3 px-1 text-xs text-muted-foreground">
-          <span>
-            <strong className="text-foreground">
-              {formatCount(items.length)}
-            </strong>{" "}
-            Treffer
-          </span>
-          <span>{formatCount(status.scanned)} Einträge geprüft</span>
-          <span>{formatDuration(status.elapsedMs)}</span>
-          {searching && (
-            <Badge variant="default" className="gap-1">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Suche läuft
-            </Badge>
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
+              <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+              <span className="selectable min-w-0 flex-1 break-words">{error}</span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setError(null)}
+                aria-label="Meldung schließen"
+              >
+                <X />
+              </Button>
+            </div>
           )}
-          {status.truncated && (
-            <Badge variant="outline" className="text-amber-500">
-              Limit von {formatCount(maxResults)} erreicht
-            </Badge>
-          )}
-          {status.cancelled && !searching && (
-            <Badge variant="secondary">Abgebrochen</Badge>
-          )}
-          {notice && (
-            <span className="font-medium text-foreground">{notice}</span>
-          )}
-          <span className="ml-auto">
-            Strg+F Suchfeld · Esc Stopp · Strg+X/C Verschieben/Kopieren · Rechtsklick für Menü
-          </span>
+
+          <ResultList
+            items={items}
+            version={version}
+            dateField={dateField}
+            groupByFolder={groupByFolder}
+            highlight={highlight}
+            highlightPath={activeMatch.matchFullPath}
+            sort={sort}
+            onSortChange={setSort}
+            onError={showError}
+            onNotice={showNotice}
+            onMoved={applyMoves}
+            toUnc={toUnc}
+            emptyState={
+              <EmptyState
+                searching={searching}
+                finished={status.finished}
+                hasCriteria={hasCriteria}
+                hasRoots={roots.length > 0}
+              />
+            }
+          />
+
+          {/* Statuszeile */}
+          <div className="flex shrink-0 flex-wrap items-center gap-3 px-1 text-xs text-muted-foreground">
+            <span>
+              <strong className="text-foreground">
+                {formatCount(items.length)}
+              </strong>{" "}
+              Treffer
+            </span>
+            <span>{formatCount(status.scanned)} Einträge geprüft</span>
+            <span>{formatDuration(status.elapsedMs)}</span>
+            {searching && (
+              <Badge variant="default" className="gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Suche läuft
+              </Badge>
+            )}
+            {status.truncated && (
+              <Badge variant="outline" className="text-amber-600 dark:text-amber-500">
+                Limit von {formatCount(maxResults)} erreicht
+              </Badge>
+            )}
+            {status.cancelled && !searching && (
+              <Badge variant="secondary">Abgebrochen</Badge>
+            )}
+            {notice && (
+              <span className="font-medium text-foreground">{notice}</span>
+            )}
+            <span className="ml-auto">
+              Strg+F Suchfeld · Esc Stopp · Strg+X/C Verschieben/Kopieren · Rechtsklick für Menü
+            </span>
+          </div>
         </div>
       </div>
     </TooltipProvider>

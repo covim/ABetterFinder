@@ -6,6 +6,26 @@ import { isDriveRoot, samePath } from "@/lib/paths";
 
 const ROOTS_KEY = "abf.roots";
 const RECENT_KEY = "abf.recentRoots";
+const THEME_KEY = "abf.theme";
+
+export type Theme = "light" | "dark";
+
+/** Gespeichertes Farbschema; ohne Eintrag bleibt es beim dunklen Standard. */
+export function loadTheme(): Theme {
+  try {
+    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+export function saveTheme(theme: Theme): void {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // Kein Speicher verfuegbar — das Schema gilt dann nur fuer diese Sitzung.
+  }
+}
 
 /** So viele zuletzt verwendete Ordner merkt sich die Auswahl. */
 export const RECENT_LIMIT = 20;
